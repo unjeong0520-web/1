@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>엘니뇨 탐구 실시간 교사 대시보드 (AI 피드백 지원)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+        body { background-color: #F1F5F9; font-family: 'Pretendard', sans-serif; }
+    </style>
+</head>
+<body class="min-h-screen relative">
+
+    <!-- 알림 메시지용 토스트 (기존 alert 대체용) -->
+    <div id="toast-notification" class="fixed top-5 right-5 z-50 transform translate-y-[-20px] opacity-0 pointer-events-none transition-all duration-300 bg-gray-900 text-white px-6 py-4 rounded-xl shadow-2xl flex items-center gap-3">
+        <i id="toast-icon" data-lucide="info" class="w-5 h-5 text-indigo-400"></i>
+        <span id="toast-message" class="text-sm font-bold">메시지 내용</span>
+    </div>
+
+    <!-- HTML 기반 교사용 보안 로그인 오버레이 (prompt 완벽 대체) -->
+    <div id="lock-screen" class="fixed inset-0 bg-slate-900 z-40 flex items-center justify-center p-6">
+        <div class="bg-white p-8 rounded-2xl border shadow-2xl max-w-md w-full text-center space-y-6">
+            <div class="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mx-auto shadow-inner">
+                <i data-lucide="lock" class="w-8 h-8"></i>
+            </div>
+            <div>
+                <h2 class="text-2xl font-black text-gray-900">교사 대시보드 인증</h2>
+                <p class="text-sm text-gray-500 mt-2">안전한 데이터 관리를 위해 보안 비밀번호를 입력하세요.</p>
+            </div>
+            <div class="space-y-3 text-left">
+                <label class="text-xs font-bold text-gray-700 block">접속 비밀번호</label>
+                <input type="password" id="dashboard-pw" class="w-full p-4 border rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none transition" placeholder="비밀번호를 입력하세요 (기본: 1234)">
+                <p id="pw-error-msg" class="text-xs text-red-600 font-bold hidden flex items-center gap-1">
+                    <i data-lucide="alert-circle" class="w-4 h-4"></i> 비밀번호가 올바르지 않습니다. 다시 입력해 주세요.
+                </p>
+            </div>
+            <button onclick="validatePassword()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg transition-all duration-200">
+                인증 및 대시보드 입장
+            </button>
+        </div>
+    </div>
+
+    <!-- 본 대시보드 컨텐츠 영역 (인증 성공 시 block 처리) -->
+    <div id="dashboard-content" class="p-6 md:p-12 max-w-7xl mx-auto space-y-8 hidden">
+        
+        <!-- 상단 헤더 및 다운로드 버튼 -->
+        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-6 rounded-2xl border shadow-sm">
+            <div>
+                <h1 class="text-2xl font-black text-gray-900 flex items-center gap-2">
+                    <i data-lucide="layout-dashboard" class="w-7 h-7 text-indigo-600"></i>
+                    📊 엘니뇨 탐구 교사 대시보드 <span class="text-xs bg-indigo-100 text-indigo-800 px-2 py-1 rounded-full font-bold">AI 첨삭 모드</span>
+                </h1>
+                <p class="text-sm text-gray-500 mt-1">학생들의 실시간 제출 데이터를 확인하고, AI 초안을 활용해 빠르게 피드백을 전달하세요.</p>
+            </div>
+            <button onclick="downloadCSV()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-5 py-3 rounded-xl shadow transition flex items-center gap-2">
+                <i data-lucide="download" class="w-5 h-5"></i> CSV 데이터 다운로드
+            </button>
+        </div>
+
+        <!-- 실시간 통계 요약 카드 및 그래프 -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div class="bg-white p-6 rounded-2xl border shadow-sm flex flex-col justify-center items-center">
+                <span class="text-gray-500 font-bold flex items-center gap-1">
+                    <i data-lucide="users" class="w-4 h-4 text-gray-400"></i> 총 과제 제출 학생 수
+                </span>
+                <span id="total-count" class="text-5xl font-black text-blue-600 mt-2">0명</span>
+            </div>
+            <div class="lg:col-span-2 bg-white p-6 rounded-2xl border shadow-sm">
+                <h3 class="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                    <i data-lucide="bar-chart-3" class="w-5 h-5 text-indigo-500"></i> 형성평가 문항별 정답률 (%)
+                </h3>
+                <div class="h-32">
+                    <canvas id="statChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- 학생별 데이터 상세 누적 표 -->
+        <div class="bg-white rounded-2xl border shadow-sm overflow-hidden">
+            <div class="p-6 border-b bg-gray-50 flex justify-between items-center">
+                <h3 class="font-extrabold text-gray-900 flex items-center gap-2">
+                    <i data-lucide="list-todo" class="w-5 h-5 text-slate-700"></i> 학생별 실시간 제출 데이터 목록
+                </h3>
+                <span class="text-xs text-gray-400 italic">* 학번/이름을 클릭하여 해당 학생의 제출 세부사항 팝업을 확인할 수 있습니다.</span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-slate-100 border-b text-slate-700 font-bold text-sm">
+                            <th class="p-4 w-40">학번/이름</th>
+                            <th class="p-4 w-28 text-center">객관식 점수</th>
+                            <th class="p-4">[탐구1] 수온 분포 원리</th>
+                            <th class="p-4">[탐구2] 극한 기후 영향</th>
+                            <th class="p-4">[탐구3] 피해 대응 방안</th>
+                            <th class="p-4 w-96">🤖 AI 초안 생성 및 교사 피드백 피팅</th>
+                        </tr>
+                    </thead>
+                    <tbody id="student-table-body" class="divide-y text-sm">
+                        <!-- 실시간 데이터 매핑 영역 -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 학생 상세 답변 열람용 가상 모달창 (alert 대용) -->
+    <div id="details-modal" class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-white p-8 rounded-2xl border shadow-2xl max-w-2xl w-full space-y-6">
+            <div class="flex justify-between items-center border-b pb-4">
+                <h3 id="modal-student-title" class="text-xl font-bold text-gray-900">학생 정보 및 답변 상세</h3>
+                <button onclick="closeDetailsModal()" class="text-gray-400 hover:text-gray-600 transition">
+                    <i data-lucide="x" class="w-6 h-6"></i>
+                </button>
+            </div>
+            <div class="space-y-4 text-sm max-h-96 overflow-y-auto pr-2">
+                <div>
+                    <h4 class="font-extrabold text-blue-900 mb-1">[탐구 1] 수온 분포 원리</h4>
+                    <p id="modal-ans-1" class="text-gray-700 bg-slate-50 p-3 rounded-lg leading-relaxed whitespace-pre-wrap"></p>
+                </div>
+                <div>
+                    <h4 class="font-extrabold text-blue-900 mb-1">[탐구 2] 극한 기후 영향</h4>
+                    <p id="modal-ans-2" class="text-gray-700 bg-slate-50 p-3 rounded-lg leading-relaxed whitespace-pre-wrap"></p>
+                </div>
+                <div>
+                    <h4 class="font-extrabold text-blue-900 mb-1">[탐구 3] 피해 대응 방안</h4>
+                    <p id="modal-ans-3" class="text-gray-700 bg-slate-50 p-3 rounded-lg leading-relaxed whitespace-pre-wrap"></p>
+                </div>
+            </div>
+            <div class="flex justify-end pt-2 border-t">
+                <button onclick="closeDetailsModal()" class="bg-gray-800 hover:bg-black text-white font-bold px-5 py-2.5 rounded-xl transition">
+                    닫기
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+        import { getDatabase, ref, onValue, update } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-database.js";
+
+        // Firebase 연동 설정 주소
+        const firebaseConfig = {
+            databaseURL: "https://ensoapp-7e009-default-rtdb.firebaseio.com/"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const database = getDatabase(app);
+
+        let allData = {};
+        let statChart = null;
+
+        // 정답지 정보 (1번: 2, 2번: 3, 3번: 2)
+        const correctAnswers = { q1: "2", q2: "3", q3: "2" };
+
+        // 커스텀 알림 배너 시스템
+        window.showToast = function(message, type = 'info') {
+            const toast = document.getElementById('toast-notification');
+            const toastMsg = document.getElementById('toast-message');
+            const toastIcon = document.getElementById('toast-icon');
+
+            toastMsg.innerText = message;
+            
+            if (type === 'success') {
+                toastIcon.setAttribute('data-lucide', 'check-circle');
+                toastIcon.className = "w-5 h-5 text-emerald-400";
+            } else if (type === 'error') {
+                toastIcon.setAttribute('data-lucide', 'alert-triangle');
+                toastIcon.className = "w-5 h-5 text-red-400";
+            } else {
+                toastIcon.setAttribute('data-lucide', 'info');
+                toastIcon.className = "w-5 h-5 text-indigo-400";
+            }
+            
+            lucide.createIcons();
+
+            toast.classList.remove('opacity-0', 'translate-y-[-20px]', 'pointer-events-none');
+            toast.classList.add('opacity-100', 'translate-y-0');
+
+            setTimeout(() => {
+                toast.classList.remove('opacity-100', 'translate-y-0');
+                toast.classList.add('opacity-0', 'translate-y-[-20px]', 'pointer-events-none');
+            }, 3000);
+        };
+
+        // 비밀번호 체크 프로세스 (가상 오버레이)
+        window.validatePassword = function() {
+            const entered = document.getElementById('dashboard-pw').value;
+            const errorMsg = document.getElementById('pw-error-msg');
+            
+            if(entered === "1234") {
+                errorMsg.classList.add('hidden');
+                document.getElementById('lock-screen').classList.add('hidden');
+                document.getElementById('dashboard-content').classList.remove('hidden');
+                showToast("인증 성공! 교사 대시보드 세션이 활성화되었습니다.", "success");
+                setTimeout(() => { lucide.createIcons(); }, 150);
+            } else {
+                errorMsg.classList.remove('hidden');
+                showToast("비밀번호 인증 실패", "error");
+            }
+        };
+
+        // 엔터키 지원 추가
+        document.getElementById('dashboard-pw').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                validatePassword();
+            }
+        });
+
+        // 학생 상세 보기 가상 모달 처리
+        window.openDetailsModal = function(studentId) {
+            const student = allData[studentId];
+            if (!student) return;
+
+            const ans = student.answers || {};
+            document.getElementById('modal-student-title').innerText = `📝 ${studentId} 학생의 상세 제출 답안`;
+            document.getElementById('modal-ans-1').innerText = ans.qText1 || "(답변 없음)";
+            document.getElementById('modal-ans-2').innerText = ans.qText2 || "(답변 없음)";
+            document.getElementById('modal-ans-3').innerText = ans.qText3 || "(답변 없음)";
+
+            const modal = document.getElementById('details-modal');
+            modal.classList.remove('hidden');
+            lucide.createIcons();
+        };
+
+        window.closeDetailsModal = function() {
+            document.getElementById('details-modal').classList.add('hidden');
+        };
+
+        // 실시간 차트 업데이트 엔진
+        function initChart(q1Per, q2Per, q3Per) {
+            const ctx = document.getElementById('statChart').getContext('2d');
+            if(statChart) {
+                statChart.data.datasets[0].data = [q1Per, q2Per, q3Per];
+                statChart.update();
+                return;
+            }
+            statChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['1번 문항 (원인)', '2번 문항 (이상기후)', '3번 문항 (기후대응)'],
+                    datasets: [{
+                        label: '정답률 (%)',
+                        data: [q1Per, q2Per, q3Per],
+                        backgroundColor: ['#3B82F6', '#10B981', '#F59E0B'],
+                        borderRadius: 8
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: { y: { min: 0, max: 100 } }
+                }
+            });
+        }
+
+        // 실시간 로컬 알고리즘 AI 피드백 첨삭 가이드 생성기
+        window.generateAIDraft = function(studentId) {
+            const student = allData[studentId];
+            if (!student || !student.answers) {
+                showToast("데이터가 불충분하여 AI 분석이 불가능합니다.", "error");
+                return;
+            }
+
+            const ans = student.answers;
+            let draft = `🤖 [AI 맞춤 가이드라인]\n`;
+
+            // [탐구 1] 분석 (무역풍, 용승)
+            const t1 = ans.qText1 || "";
+            const hasTradeWind = t1.includes("무역풍");
+            const hasUpwelling = t1.includes("용승");
+            if (hasTradeWind && hasUpwelling) {
+                draft += `• 탐구1: 무역풍의 변화와 동태평양 용승 흐름을 유기적으로 상세히 묘사하여 완벽하게 해수 온도 조절 메커니즘을 규명했습니다.\n`;
+            } else if (hasTradeWind || hasUpwelling) {
+                draft += `• 탐구1: 무역풍과 용승 중 일부분만 포착되었습니다. 바람과 상하층 바다의 인과 관계를 보완하도록 조언해 주세요.\n`;
+            } else {
+                draft += `• 탐구1: 적도 지방 무역풍 약화 및 동태평양 용승 저하라는 핵심 지구과학적 키워드를 바탕으로 서론을 다시 써볼 것을 지도해 주십시오.\n`;
+            }
+
+            // [탐구 2] 분석 (대기, 순환, 가뭄, 폭우, 홍수 등)
+            const t2 = ans.qText2 || "";
+            const hasAtmosphere = t2.includes("대기") || t2.includes("순환") || t2.includes("워커");
+            const hasExtreme = t2.includes("폭염") || t2.includes("가뭄") || t2.includes("홍수") || t2.includes("폭우") || t2.includes("산불");
+            if (hasAtmosphere && hasExtreme) {
+                draft += `• 탐구2: 워커 순환 왜곡이 지구 표면 각 지역의 심각한 극한 날씨 재해로 이어지는 흐름을 체계적으로 기술했습니다.\n`;
+            } else {
+                draft += `• 탐구2: 대기 대순환 불균형이 어떻게 대륙별 기상이변(가뭄 혹은 폭우 등)과 연결되는지 메커니즘을 구체화하도록 유도하세요.\n`;
+            }
+
+            // [탐구 3] 분석 (예측, 시스템, 대비, 예방, 정책 등)
+            const t3 = ans.qText3 || "";
+            const hasStrategy = t3.includes("예측") || t3.includes("예보") || t3.includes("인프라") || t3.includes("시스템") || t3.includes("정책") || t3.includes("절약");
+            if (hasStrategy) {
+                draft += `• 탐구3: 능동적인 기후 관측망 설치 및 지역 사회 안전망 조성을 연계하여 성실한 정책 아이디어를 돋보이게 제출했습니다.`;
+            } else {
+                draft += `• 탐구3: 국가 차원의 조기경보 기술 인프라 확충 혹은 생활 밀착형 탄소 절감 운동 등 실현 가능한 다각도 대책을 제안하도록 독려하세요.`;
+            }
+
+            const inputField = document.getElementById(`fb-${studentId}`);
+            if(inputField) {
+                inputField.value = draft;
+                inputField.classList.remove('bg-white');
+                inputField.classList.add('bg-amber-50');
+                showToast(`${studentId} 학생 피드백 초안이 구성되었습니다.`, "info");
+            }
+        };
+
+        // 피드백 전송 가공 및 데이터 전송 처리
+        window.sendFeedback = function(studentId) {
+            const fbValue = document.getElementById(`fb-${studentId}`).value.trim();
+            if(!fbValue) {
+                showToast("전송할 피드백 내용이 공백입니다.", "error");
+                return;
+            }
+
+            const updates = {};
+            updates[`/submissions/${studentId}/feedback`] = fbValue;
+            
+            update(ref(database), updates).then(() => {
+                showToast(`${studentId} 학생에게 피드백이 무사히 전달되었습니다!`, "success");
+                const inputField = document.getElementById(`fb-${studentId}`);
+                if(inputField) {
+                    inputField.classList.remove('bg-amber-50');
+                    inputField.classList.add('bg-emerald-50', 'text-emerald-900');
+                }
+            }).catch((err) => {
+                showToast("피드백 데이터베이스 전송 오류: " + err, "error");
+            });
+        };
+
+        // Firebase 실시간 리스너 연결
+        const submissionsRef = ref(database, 'submissions');
+        onValue(submissionsRef, (snapshot) => {
+            const data = snapshot.val() || {};
+            allData = data;
+            
+            const tbody = document.getElementById('student-table-body');
+            tbody.innerHTML = "";
+
+            let totalCount = 0;
+            let q1CorrectCount = 0;
+            let q2CorrectCount = 0;
+            let q3CorrectCount = 0;
+
+            const sortedKeys = Object.keys(data).sort();
+
+            sortedKeys.forEach(key => {
+                totalCount++;
+                const student = data[key];
+                const ans = student.answers || {};
+
+                // 형성평가 객관식 채점 처리 (백분율 환산)
+                let score = 0;
+                if(ans.qChoice1 === correctAnswers.q1) { score += 33; q1CorrectCount++; }
+                if(ans.qChoice2 === correctAnswers.q2) { score += 33; q2CorrectCount++; }
+                if(ans.qChoice3 === correctAnswers.q3) { score += 34; q3CorrectCount++; }
+
+                const hasExistingFeedback = student.feedback && student.feedback.trim() !== "";
+                const inputBgClass = hasExistingFeedback ? 'bg-emerald-50 text-emerald-900 border-emerald-300' : 'bg-white border-slate-300';
+
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-slate-50 transition border-b";
+                tr.innerHTML = `
+                    <td class="p-4 font-bold text-slate-800 cursor-pointer hover:text-indigo-600 flex items-center gap-1" onclick="openDetailsModal('${student.studentId}')">
+                        <i data-lucide="info" class="w-4 h-4 text-indigo-500"></i> ${student.studentId}
+                    </td>
+                    <td class="p-4 text-center">
+                        <span class="px-2.5 py-1 bg-blue-100 text-blue-800 font-bold rounded-md text-xs">${score}점</span>
+                    </td>
+                    <td class="p-4 text-gray-600 max-w-xs truncate" title="${ans.qText1 || ''}">${ans.qText1 || '-'}</td>
+                    <td class="p-4 text-gray-600 max-w-xs truncate" title="${ans.qText2 || ''}">${ans.qText2 || '-'}</td>
+                    <td class="p-4 text-gray-600 max-w-xs truncate" title="${ans.qText3 || ''}">${ans.qText3 || '-'}</td>
+                    <td class="p-4">
+                        <div class="space-y-2">
+                            <textarea id="fb-${student.studentId}" rows="3" class="w-full border p-2 rounded-lg text-xs transition focus:outline-none focus:ring-2 focus:ring-indigo-500 ${inputBgClass}" placeholder="피드백 작성대기 (AI 초안 버튼을 활용해보세요)">${student.feedback || ''}</textarea>
+                            <div class="flex gap-2 justify-end">
+                                <button onclick="generateAIDraft('${student.studentId}')" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold px-3 py-1.5 rounded-lg border border-indigo-200 flex items-center gap-1 transition">
+                                    🤖 AI 첨삭 초안
+                                </button>
+                                <button onclick="sendFeedback('${student.studentId}')" class="bg-gray-900 hover:bg-black text-white text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 transition shadow-sm">
+                                    ✍️ 피드백 확정 및 전송
+                                </button>
+                            </div>
+                        </div>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            document.getElementById('total-count').innerText = totalCount + "명";
+
+            // 정답률 통계 갱신 및 차트 그리기
+            const q1Per = totalCount > 0 ? Math.round((q1CorrectCount / totalCount) * 100) : 0;
+            const q2Per = totalCount > 0 ? Math.round((q2CorrectCount / totalCount) * 100) : 0;
+            const q3Per = totalCount > 0 ? Math.round((q3CorrectCount / totalCount) * 100) : 0;
+            initChart(q1Per, q2Per, q3Per);
+            
+            // 신규 동적 아이콘 활성화
+            lucide.createIcons();
+        });
+
+        // 수집 데이터 CSV 파일 다운로드 기능
+        window.downloadCSV = function() {
+            if(Object.keys(allData).length === 0) {
+                showToast("다운로드할 데이터가 없습니다.", "error");
+                return;
+            }
+            let csvContent = "\uFEFF학번/이름,탐구1(원리),탐구2(기후),탐구3(대응),객관식1,객관식2,객관식3,교사피드백,제출시간\n";
+            Object.keys(allData).sort().forEach(key => {
+                const s = allData[key];
+                const a = s.answers || {};
+                csvContent += `"${s.studentId}","${(a.qText1||'').replace(/"/g, '""')}","${(a.qText2||'').replace(/"/g, '""')}","${(a.qText3||'').replace(/"/g, '""')}","${a.qChoice1 || ''}","${a.qChoice2 || ''}","${a.qChoice3 || ''}","${(s.feedback||'').replace(/"/g, '""')}","${s.timestamp||''}"\n`;
+            });
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", `엘니뇨_AI탐구_피드백_현황_${new Date().toLocaleDateString()}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            showToast("CSV 다운로드가 완료되었습니다.", "success");
+        };
+
+        // 초기 아이콘 세팅
+        lucide.createIcons();
+    </script>
+</body>
+</html>
